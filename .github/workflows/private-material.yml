@@ -1,0 +1,95 @@
+name: Private Campus Materials
+run-name: private-${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Random job ID from the local helper (not a credential)
+        required: true
+        type: string
+      secret_name:
+        description: One-time encrypted-material Secret name (never its value)
+        required: false
+        default: ''
+        type: string
+      test_mode:
+        description: Synthetic offline test, without school access or credentials
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install download and encryption dependencies
+        run: pip install requests pycryptodome
+      - name: Fetch encrypted material before download link expires
+        if: ${{ !inputs.test_mode }}
+        env:
+          ICS_MATERIAL_JOB: ${{ secrets[inputs.secret_name] }}
+          ICS_JOB_ID: ${{ inputs.job_id }}
+          ICS_MATERIAL_DIR: ${{ runner.temp }}/private-material
+        run: python private_material_cloud.py --fetch
+      - name: Install cloud dependencies
+        run: pip install -r requirements.txt pynacl imageio-ffmpeg
+      - name: Verify material boundaries
+        run: python -m unittest test_material_protocol test_material_collect test_material_worker test_campus test_campus_local
+      - name: Install FFmpeg
+        if: ${{ !inputs.test_mode }}
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Cache speech models
+        if: ${{ !inputs.test_mode }}
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: |
+            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
+            silero_vad.onnx
+          key: private-sensevoice-2024-07-17-v1
+      - name: Download speech models
+        if: ${{ !inputs.test_mode && steps.models.outputs.cache-hit != 'true' }}
+        run: |
+          curl -fL --retry 3 -o model.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          tar xf model.tar.bz2
+          rm model.tar.bz2
+          curl -fL --retry 3 -o silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+      - name: Offline ASR and OCR
+        env:
+          ICS_MATERIAL_JOB: ${{ secrets[inputs.secret_name] }}
+          ICS_JOB_ID: ${{ inputs.job_id }}
+          ICS_TEST_MODE: ${{ inputs.test_mode }}
+          ICS_MATERIAL_DIR: ${{ runner.temp }}/private-material
+          ICS_RESULT_DIR: ${{ runner.temp }}/private-result
+          DATA_DIR: ${{ runner.temp }}/private-data
+          DB_PATH: ${{ runner.temp }}/private-data/icourse.db
+        run: |
+          if python -u private_material_cloud.py > "$RUNNER_TEMP/private-worker.log" 2>&1; then
+            echo "Offline processing finished; only encrypted results are exported."
+          else
+            echo "Processing failed; no private worker log is published."
+            exit 1
+          fi
+      - name: Upload encrypted result
+        if: ${{ !inputs.test_mode }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-result-${{ inputs.job_id }}
+          path: ${{ runner.temp }}/private-result/result.enc
+          retention-days: 1
+          if-no-files-found: error
+      - name: Remove runner scratch data
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/private-material" "$RUNNER_TEMP/private-result" "$RUNNER_TEMP/private-data" "$RUNNER_TEMP/private-worker.log"
