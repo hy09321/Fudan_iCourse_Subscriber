@@ -1,0 +1,38 @@
+iCourse 手动隐私版：使用说明
+
+已为 hy09321/Fudan_iCourse_Subscriber 配置。每周需要时，双击 Start-Private.cmd。
+本机只运行登录、云端任务控制及模型 API 请求；语音识别和 OCR 在 GitHub Actions 上运行。
+
+首次准备 GitHub 令牌（请自行在 GitHub 创建，不要发给聊天助手）：
+https://github.com/settings/personal-access-tokens/new
+选择 Fine-grained token，Resource owner 为 hy09321，Only select repositories 仅选 Fudan_iCourse_Subscriber。
+Repository permissions 仅需 Actions: Read and write；Secrets: Read and write（Metadata 自动只读）。
+设置你需要的有效期。令牌每次在本机输入，程序不保存。它仅发送给 GitHub API 验证身份，不作为仓库 Secret 上传。
+
+每次运行：
+1. 双击 Start-Private.cmd，选择 1。
+2. 输入 GitHub 令牌、复旦学号及 UIS 密码。密码和令牌不回显。
+3. 输入课程 ID（iCourse 课程网页 URL 中的数字，多门课用英文逗号分隔）及起始日期，默认最近 7 天。
+4. 保持窗口开启、网络连接，等待云端转录结束。不要让电脑睡眠。
+5. 选择模型服务，输入模型 API Key。请求直接从本机发给你选择的模型服务商。
+6. 笔记在 private_notes 目录。发送 QQ 邮件为可选项；选择发送后才要求本机输入 SMTP 授权码。
+
+模型请求失败可重新启动并选择 2，使用已取回的文本重试，无需重新登录学校。
+原来的 iCourse Check 定时工作流应保持停用；不要按原始 README 填入学校密码或模型 Key。
+
+数据去向：
+学校密码只交给复旦认证服务，不写入文件，也不交给 GitHub。
+GitHub 云端接收临时 WebVPN 会话、课程筛选条件及本次结果加密密钥。会话仍有登录权限，不能视作公开数据。
+临时 Secret 用随机名称建立，任务排队后尝试立即删除；任务收到的副本会保留到本次任务结束。
+结果通过 AES-GCM 加密上传，成功取回后尝试删除云端副本；未删除时按 1 天保留期过期。
+公开仓库中只发布程序源码。课程文本及笔记只在运行期间由云端处理，最终保存本机，不提交到仓库。
+程序不将凭据写入文件或日志；不承诺对操作系统内存、交换文件进行安全擦除。
+
+异常处理：
+按 Ctrl+C 会尝试取消任务和删除临时 Secret；强制关机或断网可能使自动清理失败。
+此时到仓库 Settings → Secrets and variables → Actions 删除以 ICS_SESSION_ 开头的临时 Secret，并在 Actions 取消仍运行的本次任务。
+若出现 SESSION_REJECTED，学校可能限制会话跨 IP 使用。本版本不会通过上传学校密码来绕过限制。
+首次真实课程运行仍需你输入凭据后验证；离线自检不代表跨 IP 登录已验证。
+
+其他电脑安装：Python 3.12，执行 python -m venv .venv，再执行 .venv\Scripts\python -m pip install -r requirements-private-local.txt。
+不要在本机安装原来的 requirements.txt，那个文件用于云端的完整处理环境。
