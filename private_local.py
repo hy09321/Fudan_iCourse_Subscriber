@@ -1,8 +1,8 @@
 """Small local controller: interactive credentials, cloud extraction, local LLM.
 
 Never writes credentials to disk or sends school passwords/model keys to GitHub.
-Only the deliberately allowlisted private_protocol job is sent as a short-lived
-GitHub Secret. This is an interactive program, not an unattended scheduler.
+Default mode uses locally collected encrypted materials, not school cookies.
+The legacy WebVPN helper remains for compatibility. All runs are interactive.
 """
 import base64
 import contextlib
@@ -35,10 +35,11 @@ class UserError(Exception):
 
 
 class GitHub:
-    def __init__(self, token, repo=REPO):
+    def __init__(self, token, repo=REPO, workflow=WORKFLOW):
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
             raise UserError('仓库名称格式错误。')
         self.repo = repo
+        self.workflow = workflow
         self.base = 'https://api.github.com/repos/' + repo
         self.http = requests.Session()
         self.http.headers.update({'Authorization': 'Bearer ' + token,
@@ -49,7 +50,7 @@ class GitHub:
         response = self.http.request(method, self.base + path, timeout=45,
                                      allow_redirects=False, **kwargs)
         if not 200 <= response.status_code < 300:
-            raise UserError(f'GitHub 请求失败（HTTP {response.status_code}）。请检查仓库及令牌的 Actions、Secrets 权限。')
+            raise UserError(f'GitHub 请求失败（HTTP {response.status_code}）。请检查仓库及令牌的 Actions、Secrets、Contents 权限。')
         return response.json() if response.content else None
 
     def put_job(self, name, job):
@@ -78,9 +79,9 @@ class GitHub:
 
     def run(self, job):
         # Preflight before uploading anything; never auto-enable the old workflow.
-        workflow = self.call('GET', '/actions/workflows/' + WORKFLOW)
+        workflow = self.call('GET', '/actions/workflows/' + self.workflow)
         if workflow['state'] != 'active':
-            raise UserError('请在 GitHub 启用 Private Manual Extraction（不要启用原来的 iCourse Check）。')
+            raise UserError('请在 GitHub 启用对应的 Private 工作流。')
         secret_name = 'ICS_SESSION_' + job['job_id'].upper()
         run_id = None
         uploaded = False
@@ -90,17 +91,17 @@ class GitHub:
             # Set before upload, so a lost HTTP response still triggers cleanup.
             uploaded = True
             self.put_job(secret_name, job)
-            self.call('POST', '/actions/workflows/' + WORKFLOW + '/dispatches', json={
+            self.call('POST', '/actions/workflows/' + self.workflow + '/dispatches', json={
                 'ref': 'main', 'inputs': {'job_id': job['job_id'],
                                         'secret_name': secret_name, 'test_mode': False}})
-            job['cookies'].clear()
-            print('已提交临时会话。等待云端任务；请保持本窗口和网络连接。')
+            job.get('cookies', []).clear()
+            print('已提交本次加密任务。等待云端处理；请保持本窗口和网络连接。')
             deadline = time.monotonic() + 7 * 3600
             last_status = None
             queue_deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
                 if run_id is None:
-                    runs = self.call('GET', '/actions/workflows/' + WORKFLOW + '/runs',
+                    runs = self.call('GET', '/actions/workflows/' + self.workflow + '/runs',
                                      params={'event': 'workflow_dispatch', 'per_page': 100})['workflow_runs']
                     matching = [r for r in runs if r.get('display_title') == 'private-' + job['job_id']]
                     if not matching:
@@ -113,7 +114,7 @@ class GitHub:
                     # Repository Secrets are snapshotted when the run is queued.
                     secret_removed = self.remove_job(secret_name)
                     if secret_removed:
-                        print('本次临时 Secret 已从仓库配置删除；排队任务持有本次会话。')
+                        print('本次临时 Secret 已从仓库配置删除；排队任务持有本次处理参数。')
                 run = self.call('GET', '/actions/runs/' + str(run_id))
                 status = run['status']
                 if status != last_status:
@@ -169,23 +170,44 @@ class GitHub:
 def login_locally(student_id, password):
     from src.api.webvpn import WebVPNSession
     from src.api.icourse import ICourseClient
+    from private_login_diagnostics import LoginDiagnostics
     vpn = WebVPNSession()
+    diagnostic_path = ROOT / 'logs' / 'login-diagnostic.json'
+    diagnostic = LoginDiagnostics(diagnostic_path)
+    diagnostic.attach(vpn)
     try:
         with open(os.devnull, 'w') as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            diagnostic.set_stage('WEBVPN_LOGIN')
             vpn.login(student_id, password)
+            diagnostic.set_stage('ICOURSE_LOGIN')
             vpn.authenticate_icourse(student_id, password)
+            diagnostic.set_stage('ICOURSE_VERIFY')
             if not ICourseClient(vpn).check_alive():
                 raise UserError('本机复旦登录校验失败。')
         cookies = session_cookies(vpn.session.cookies)
         if not cookies:
             raise UserError('登录成功但没有可移交的 WebVPN 会话。')
+        diagnostic.finish(True)
         return cookies
-    except UserError:
-        raise
-    except Exception:
-        raise UserError('复旦登录失败。请检查账号、密码、网络或学校要求的二次验证。') from None
+    except Exception as exc:
+        diagnostic.finish(False, exc)
+        log_notice = ('\n本机脱敏诊断日志：' + str(diagnostic_path)) if diagnostic.saved else '\n未能写入诊断日志，请保留上方脱敏错误提示。'
+        raise UserError(diagnostic.failure_message() + log_notice) from None
     finally:
         vpn.session.close()
+
+
+def diagnose_login():
+    print('仅检查本机复旦登录，不需要 GitHub 令牌，也不会创建云端任务。')
+    student_id = input('复旦学号（仅用于本机登录）：').strip()
+    password = getpass.getpass('UIS 密码（不保存，不回显）：')
+    try:
+        print('正在检查本机登录，脱敏日志只记录步骤、状态码及错误类别……')
+        cookies = login_locally(student_id, password)
+        cookies.clear()
+        print('本机复旦登录和 iCourse 会话校验成功。没有上传会话到 GitHub。')
+    finally:
+        del password, student_id
 
 
 def make_job(cookies, courses, since, skip_ids):
@@ -301,10 +323,15 @@ def email_local(files):
 
 def main():
     print('iCourse 手动隐私版：复旦密码、模型 Key、GitHub 令牌均在本机输入，不保存到文件。')
-    print('云端只接收临时 WebVPN 会话；请保持本窗口开启，按 Ctrl+C 可取消。')
-    print('1 登录并云端转录，然后本机生成摘要\n2 对已取回的结果生成摘要（无需重新登录复旦）')
+    print('学校连接使用 aTrust／校园网；云端仅接收加密课程素材，不接收学校登录会话。')
+    print('请保持本窗口开启；Ctrl+C 可取消并清理本次临时文件。')
+    print('1 本机读取课程，云端语音识别和 OCR，然后本机生成摘要\n2 对已取回的结果生成摘要（无需重新登录复旦）\n3 仅诊断 aTrust／校园网登录（无需 GitHub 令牌）')
     mode = input('选择（默认 1）：').strip() or '1'
-    if mode == '2':
+    if mode == '3':
+        from private_campus_local import diagnose_campus
+        diagnose_campus()
+        return
+    elif mode == '2':
         candidates = sorted(NOTES.glob('input-*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
         if not candidates:
             raise UserError('尚无本机结果。请先选择 1。')
@@ -315,7 +342,8 @@ def main():
             raise UserError('结果编号无效。')
         path = candidates[int(number) - 1]
     elif mode == '1':
-        path = cloud_extract()
+        from private_campus_local import cloud_extract_campus
+        path = cloud_extract_campus()
     else:
         raise UserError('选项无效。')
     files = summarize_local(path)
@@ -324,6 +352,9 @@ def main():
 
 
 if __name__ == '__main__':
+    # The campus controller imports this module's shared API. Reuse this exact
+    # module when launched as a script, including the same UserError class.
+    sys.modules['private_local'] = sys.modules[__name__]
     try:
         main()
     except KeyboardInterrupt:

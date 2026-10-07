@@ -1,38 +1,50 @@
-iCourse 手动隐私版：使用说明
+iCourse 手动隐私版：aTrust／校园网 + GitHub 语音识别和 OCR
 
-已为 hy09321/Fudan_iCourse_Subscriber 配置。每周需要时，双击 Start-Private.cmd。
-本机只运行登录、云端任务控制及模型 API 请求；语音识别和 OCR 在 GitHub Actions 上运行。
+每周需要时双击桌面的 Start-Private.cmd。启动程序仍指向本机安装目录。
+校外：先连接 aTrust。校内：连接校园网即可，无须运行 aTrust。
+程序访问原始学校 HTTPS 域名，忽略 HTTP 代理环境变量，由 Windows 选择学校路由。
+不会修改 hosts、永久路由或系统代理。当前 aTrust 连接已做无凭据连通性验证；校内直连仍需实际环境验证。
 
-首次准备 GitHub 令牌（请自行在 GitHub 创建，不要发给聊天助手）：
-https://github.com/settings/personal-access-tokens/new
-选择 Fine-grained token，Resource owner 为 hy09321，Only select repositories 仅选 Fudan_iCourse_Subscriber。
-Repository permissions 仅需 Actions: Read and write；Secrets: Read and write（Metadata 自动只读）。
-设置你需要的有效期。令牌每次在本机输入，程序不保存。它仅发送给 GitHub API 验证身份，不作为仓库 Secret 上传。
+首次准备 GitHub 令牌（请自行在 GitHub 输入，不要发到聊天中）：
+https://github.com/settings/personal-access-tokens
+Fine-grained token 的 Resource owner 为 hy09321，仅选择 Fudan_iCourse_Subscriber 仓库。
+Repository permissions 需要：Actions: Read and write；Secrets: Read and write；Contents: Read and write。
+新增的 Contents 权限用于创建、上传和删除临时草稿 Release 中的加密素材；不需要 Workflows 写权限。
+令牌每次在本机输入，不保存；仅用来认证 GitHub API 和 GitHub 上传服务，不交给云端运行器。
 
 每次运行：
-1. 双击 Start-Private.cmd，选择 1。
-2. 输入 GitHub 令牌、复旦学号及 UIS 密码。密码和令牌不回显。
-3. 输入课程 ID（iCourse 课程网页 URL 中的数字，多门课用英文逗号分隔）及起始日期，默认最近 7 天。
-4. 保持窗口开启、网络连接，等待云端转录结束。不要让电脑睡眠。
-5. 选择模型服务，输入模型 API Key。请求直接从本机发给你选择的模型服务商。
-6. 笔记在 private_notes 目录。发送 QQ 邮件为可选项；选择发送后才要求本机输入 SMTP 授权码。
+1. 双击 Start-Private.cmd，选 1。
+2. 输入上述 GitHub 令牌，程序先清理上次残留，再在本机输入学号和 UIS 密码，选择课程 ID、起始日期（默认最近 7 天）。
+3. 本机逐节课读取正常开放的 PPT 和文字稿；需要时临时下载视频并提取单声道音频。
+4. 保持电脑及窗口开启、网络连接。云端执行语音识别和 OCR，再将加密文本取回本机。
+5. 选择模型服务、输入 API Key；本机向你所选的模型服务商请求摘要。
+6. 笔记和可重试的文字结果位于 private_notes。发送 QQ 邮件为可选项。
 
-模型请求失败可重新启动并选择 2，使用已取回的文本重试，无需重新登录学校。
-原来的 iCourse Check 定时工作流应保持停用；不要按原始 README 填入学校密码或模型 Key。
+选 2：使用已取回结果重新生成摘要，无须重新登录学校。
+选 3：仅诊断 aTrust／校园网登录，不需要 GitHub 令牌。
+诊断记录：logs/campus-login-diagnostic.json，仅含固定阶段和脱敏错误分类。
 
-数据去向：
-学校密码只交给复旦认证服务，不写入文件，也不交给 GitHub。
-GitHub 云端接收临时 WebVPN 会话、课程筛选条件及本次结果加密密钥。会话仍有登录权限，不能视作公开数据。
-临时 Secret 用随机名称建立，任务排队后尝试立即删除；任务收到的副本会保留到本次任务结束。
-结果通过 AES-GCM 加密上传，成功取回后尝试删除云端副本；未删除时按 1 天保留期过期。
-公开仓库中只发布程序源码。课程文本及笔记只在运行期间由云端处理，最终保存本机，不提交到仓库。
-程序不将凭据写入文件或日志；不承诺对操作系统内存、交换文件进行安全擦除。
+隐私和清理：
+学校密码和学校 Cookie 只在本机内存中使用，均不发送给 GitHub。模型 API Key 只用于本机请求所选模型服务。
+本机每课生成随机 AES-256-GCM 密钥，加密课程音频、PPT及文字稿后上传到草稿 Release；不提交课程资料到 Git 历史。
+云端通过一次性 Secret 接收加密素材的临时下载链接和解密／结果加密密钥。云端处理期间会解密课程资料。
+临时 Secret 在任务进入队列后删除；排队任务保留本次参数至任务结束。云端结果加密后导出，取回后删除；删除失败按 1 天保留期过期。
+每课结束或按 Ctrl+C 时，本机尝试删除草稿 Release 和本地临时媒体。断网、强制关机可能中断清理。
+未删除的草稿 Release 不会自动一天过期；程序会保存仅含随机任务编号和 Release 编号的清理记录，下一次输入令牌后重试删除。
+手动核查：仓库 Releases 中的 ics-private- 开头草稿，以及 Settings → Secrets and variables → Actions 中的 ICS_SESSION_ 开头 Secret。
+恢复后可在 Actions 取消尚未结束的 private-任务。不要删除与本程序无关的内容。
+最终笔记／文字稿保留本机供重试；密码、Key、令牌不写入配置或日志。不承诺操作系统交换文件／进程内存的安全擦除。
 
-异常处理：
-按 Ctrl+C 会尝试取消任务和删除临时 Secret；强制关机或断网可能使自动清理失败。
-此时到仓库 Settings → Secrets and variables → Actions 删除以 ICS_SESSION_ 开头的临时 Secret，并在 Actions 取消仍运行的本次任务。
-若出现 SESSION_REJECTED，学校可能限制会话跨 IP 使用。本版本不会通过上传学校密码来绕过限制。
-首次真实课程运行仍需你输入凭据后验证；离线自检不代表跨 IP 登录已验证。
+本机资源：
+不安装本地语音模型或 OCR 模型。音频转换使用轻量 FFmpeg，限制单线程；转换时仍会消耗 CPU。
+每节课视频下载上限 2 GiB，加密素材包上限 512 MiB，PPT 单图 20 MiB、最多 1000 张；超限会给出提示。
+下载、打包、加密时会同时存在部分临时文件，建议预留数 GiB 磁盘空间。正常结束自动清理，不常驻后台。
+只处理学校已正常开放的课次，不尝试隐藏或尚未开放的回放地址。
 
-其他电脑安装：Python 3.12，执行 python -m venv .venv，再执行 .venv\Scripts\python -m pip install -r requirements-private-local.txt。
-不要在本机安装原来的 requirements.txt，那个文件用于云端的完整处理环境。
+GitHub：
+使用 Private Campus Materials 手动工作流。原 iCourse Check 定时工作流保持停用。
+不要按原始 README 将学校密码或模型 Key 填进 GitHub Secrets。
+旧 WebVPN 手动工作流保留源码供回退，但桌面程序默认不再使用它。
+
+其他电脑安装：Python 3.12，python -m venv .venv，然后 .venv\Scripts\python -m pip install -r requirements-private-local.txt。
+本机不要安装 requirements.txt（那是云端完整语音/OCR环境）。

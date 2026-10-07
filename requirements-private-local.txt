@@ -2,3 +2,4 @@ requests
 pycryptodome
 pynacl
 openai
+imageio-ffmpeg

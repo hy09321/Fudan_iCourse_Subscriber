@@ -3,6 +3,7 @@ __pycache__/
 private_notes/
 tools/
 logs/
+private_scratch/
 *.pyc
 .env
 data/*
